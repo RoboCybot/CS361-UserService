@@ -33,19 +33,11 @@ export const createUser = async (req, res) => {
 
     const userId = info.lastInsertRowid;
 
-    const { accessToken, refreshToken } = createTokens({ userId });
-
-    res.cookie("refreshToken", refreshToken, {
-      httpOnly: true,
-      secure: false, //for dev = false, for production = true
-      sameSite: "Strict", // will only send to the same site that requested it
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
-
     res.status(201).json({
-      accessToken,
+      message: "User created, verify MFA",
       user: {
         userId,
+        username,
         phoneNumber,
         mfaToken,
       },
@@ -58,19 +50,38 @@ export const createUser = async (req, res) => {
 
 // MFA Check needs to receive
 export const MFACheck = async (req, res) => {
-  const userVal = req.body.mfaInput;
-  const realToken = req.body.mfaToken;
+  const { mfaInput: userVal, mfaToken: realToken } = req.body;
 
   try {
-    const row = db
-      .prepare("SELECT 1 FROM Users WHERE mfaToken = ? LIMIT 1")
+    const user = db
+      .prepare("SELECT * FROM users WHERE mfaToken = ? LIMIT 1")
       .get(userVal);
-    if (row) {
+
+    if (!user) {
+      return res.status(400).json({ error: "MFA Failed" });
+    }
+
+    if (user) {
       console.log("MFA verified");
+
       db.prepare("UPDATE users SET mfaToken = NULL WHERE mfaToken = ?").run(
         realToken
       );
-      res.status(201).json({ message: "MFA Verified" });
+
+      const { accessToken, refreshToken } = createTokens(user);
+
+      res.cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: false,
+        sameSite: "Lax",
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+      });
+
+      res.status(201).json({
+        message: "MFA Verified",
+        accessToken,
+        user: { ...user, password: undefined },
+      });
     } else {
       console.log("MFA failed, deleting user");
       db.prepare("DELETE FROM users WHERE mfaToken = ?").run(realToken);
@@ -88,11 +99,17 @@ export const getUser = async (req, res) => {
     const stmt = db.prepare(
       "SELECT username, avatarURL, phoneNumber, userBio FROM users WHERE userId = ?"
     );
+
+    const user = stmt.get(userId);
     console.log("Fetching user with ID:", userId);
-    await res.json(stmt.get(userId));
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    return res.status(200).json(user);
   } catch (err) {
     console.error(err);
-    res.status(404).json({ error: "User not found" });
+    return res.status(500).json({ error: "User not found" });
   }
 };
 
@@ -136,7 +153,7 @@ export const login = async (req, res) => {
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
       secure: false, //for dev = false, for production = true
-      sameSite: "Strict", // will only send to the same site that requested it
+      sameSite: "Lax", // will only send to the same site that requested it
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
@@ -178,7 +195,7 @@ export const refreshToken = async (req, res) => {
     res.cookie("refreshToken", "", {
       httpOnly: true,
       secure: false,
-      sameSite: "Strict",
+      sameSite: "Lax",
       maxAge: 0,
     });
     return res.status(401).json({ error: "invalid or expired refresh token" });
@@ -191,7 +208,7 @@ export const logout = (req, res) => {
   res.cookie("refreshToken", " ", {
     httpOnly: true,
     secure: false,
-    sameSite: "Strict",
+    sameSite: "Lax",
     maxAge: 0,
   });
   return res.json({ message: "Logged out successfully" });
