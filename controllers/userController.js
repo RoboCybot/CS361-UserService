@@ -48,14 +48,14 @@ export const createUser = async (req, res) => {
   }
 };
 
-// MFA Check needs to receive
+// MFA Check used for multi factor authentication only during user creation
 export const MFACheck = async (req, res) => {
-  const { mfaInput: userVal, mfaToken: realToken } = req.body;
+  const { mfaInput, mfaToken } = req.body;
 
   try {
     const user = db
       .prepare("SELECT * FROM users WHERE mfaToken = ? LIMIT 1")
-      .get(userVal);
+      .get(mfaInput);
 
     if (!user) {
       return res.status(400).json({ error: "MFA Failed" });
@@ -65,7 +65,7 @@ export const MFACheck = async (req, res) => {
       console.log("MFA verified");
 
       db.prepare("UPDATE users SET mfaToken = NULL WHERE mfaToken = ?").run(
-        realToken
+        mfaInput
       );
 
       const { accessToken, refreshToken } = createTokens(user);
@@ -84,7 +84,7 @@ export const MFACheck = async (req, res) => {
       });
     } else {
       console.log("MFA failed, deleting user");
-      db.prepare("DELETE FROM users WHERE mfaToken = ?").run(realToken);
+      db.prepare("DELETE FROM users WHERE mfaToken = ?").run(mfaToken);
       res.status(400).json({ error: "MFA Failed" });
     }
   } catch (error) {
